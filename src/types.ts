@@ -22,6 +22,11 @@ export interface NormalizedMessage {
 export interface ScanOptions {
   sinceMs?: number;
   maxMessages?: number;
+  /**
+   * Adapters that can emit tool calls/results as separate records do so only
+   * for events at or after this time. Undefined disables tool events.
+   */
+  toolEventsSinceMs?: number;
 }
 
 export interface ScanResult {
@@ -74,6 +79,12 @@ export interface SourceSyncResult {
   skipped: number;
   appended: number;
   failed: number;
+  /**
+   * Oversized messages already stored whole under their original identity.
+   * Their split parts are held back (not written) until the migration script
+   * replaces the whole record, so the content is never stored twice.
+   */
+  heldForMigration: number;
   warnings: string[];
 }
 

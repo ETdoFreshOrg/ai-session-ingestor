@@ -48,7 +48,10 @@ export function toApiPayload(message: NormalizedMessage): Record<string, unknown
     metadata: {
       ...message.metadata,
       conversation_id: message.metadata.sessionId ?? message.metadata.session_id ?? null,
-      kind: message.content.startsWith('[IMPORTANT: The user has invoked the ')
+      // An adapter may classify a record itself (tool_output for tool calls and
+      // results, which the Memory Database leaves out of default search).
+      kind: typeof message.metadata.kind === 'string' ? message.metadata.kind
+        : message.content.startsWith('[IMPORTANT: The user has invoked the ')
         ? 'injected_instructions'
         : message.metadata.phase === 'commentary' ? 'progress_update'
         : message.metadata.role === 'assistant' ? 'assistant_message' : 'human_message',
@@ -240,7 +243,7 @@ async function writeOne(
   throw new Error(lastError);
 }
 
-async function requireInsertOnlyCapability(config: ApiConfig): Promise<void> {
+export async function requireInsertOnlyCapability(config: ApiConfig): Promise<void> {
   const timeoutMs = Math.max(1_000, Number.parseInt(process.env.API_TIMEOUT_MS ?? "30000", 10) || 30_000);
   let response: HttpResult;
   try {

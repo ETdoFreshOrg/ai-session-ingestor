@@ -81,14 +81,60 @@ SQLite and atomic export files survive redeploys. Shutdown preserves checkpoints
 
 | Application | Local store | Memory Database source | Stable identity |
 | --- | --- | --- | --- |
-| Claude Code | `~/.claude/projects/**/*.jsonl` | `claudecode` | session ID + message UUID |
+| Claude Code | `~/.claude/projects/**/*.jsonl` | `claudecode` | session ID + message UUID (tool events add `:tool_use:<id>` / `:tool_result:<id>`) |
 | Codex | `~/.codex/sessions/**/*.jsonl` and archived sessions | `codex` | session ID + JSONL line + role |
 | OpenCode | `~/.local/share/opencode/opencode.db` | `opencode` | OpenCode message ID |
 | Antigravity | `~/.gemini/antigravity-cli/brain/**/transcript.jsonl` | `antigravity` | conversation + step + event + line |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | `pi` | session ID + entry ID |
 
-Only human/user and assistant text is stored. Tool calls, tool results, and
-thinking/reasoning blocks are intentionally excluded.
+Every user and assistant message is its own record in its session's
+conversation (`metadata.sessionId` / `conversation_id`); no adapter stores a
+whole session as one record. Thinking/reasoning blocks are never stored.
+
+Claude Code tool calls and tool results are stored as separate records with
+`metadata.role = "tool"`, `metadata.kind = "tool_output"` and
+`metadata.toolEvent = "call" | "result"` (plus `toolName`, `toolUseId`,
+`isError`). The Memory Database leaves `tool_output` out of default search.
+Each tool record is capped at 16,000 characters (`truncated` and
+`originalChars` say what was cut). `CLAUDECODE_TOOL_EVENTS` controls them:
+
+- `new` (default): only events after this version's first real sync on the
+  host (the cutoff is kept in the checkpoint), so upgrading does not backfill
+  every historical tool event.
+- `all` or an ISO date: backfill all events, or those since that date.
+- `off`: none.
+
+The other adapters still store only user and assistant text.
+
+### Oversized messages
+
+A message longer than 50,000 characters is split into ordered parts. Part 1
+keeps the message's original identity; later parts are `<id>:part:<n>`. Each
+part carries `part`, `parts`, `partOf` and `originalChars`, and its timestamp
+is offset by one millisecond per part to keep order. Boundaries prefer line
+breaks and are deterministic, so reruns are idempotent.
+
+An oversized message that an earlier version already stored whole is not
+split automatically: its parts are held (`heldForMigration` in the sync result
+and `held_for_migration` in the published status) so the text is never stored
+twice. `scripts/migrate-oversized-records.ts` replaces such records. It is a
+dry run unless `--apply` is given, and should only be applied with the owner's
+approval:
+
+```bash
+pm2 stop ai-session-ingestor
+npm run migrate:oversized                      # dry run: lists records and part counts
+npm run migrate:oversized -- --limit 1 --apply # replace one record, then check it
+npm run migrate:oversized -- --apply
+npm run migrate:oversized -- --record <record-uuid>          # transcript gone locally
+pm2 start ai-session-ingestor
+```
+
+With `--apply`, part 1 is posted under the original identity with
+`conflict_mode=skip_or_append`: the API keeps the whole text as the record's
+previous version (`GET /api/messages/:record_id/history`) and part 1 becomes
+current. Later parts are insert-only. Nothing is deleted. A journal is written
+under `DATA_DIR/migrations/`.
 
 ## Safety contract
 
@@ -231,14 +277,38 @@ paths.
 Session JSONL is streamed rather than loaded as one string, so multi-gigabyte
 logs do not hit Node's string-size limit. Physical line numbering remains stable.
 The service persists its last sync result and publishes per-host/per-source
-heartbeats to the same Memory API. Warnings or unavailable sources remain visible;
-a successful poll with no new messages is still reported.
+heartbeats to the same Memory API. Warnings remain visible; a successful poll
+with no new messages is still reported.
+
+A source whose tool is not installed on a host is skipped quietly: no warning,
+no error and no log line each run. If an earlier version published an error
+row for it, one clean status (`error_message` null, `metadata.status`
+`not_installed`) replaces it once; otherwise nothing is published. A source
+that was available on the host and then disappears is reported once, with an
+error and a single log warning, and then stays quiet until it returns.
+`DATA_DIR/source-availability.json` remembers what was reported.
 
 The connectors/imessage.py collector runs locally on a Mac with read access to
 ~/Library/Messages/chat.db. It uses message GUIDs for idempotency, durable row
 checkpoints, and a dedicated imessage write token. It uploads available original
-attachments through the Memory API and reports unavailable/oversized files for
-retry. It does not decode attributed-only bodies; these are explicitly labeled.
+attachments through the Memory API, ten files per request. An attachment whose
+bytes are not on disk is retried with backoff (30 minutes doubling to daily,
+`--max-attachment-retries`, default 8, about three days) and then recorded as
+unavailable; files over 32 MB are recorded as unavailable at once. A retry sends
+nothing unless a missing file has appeared. Missing attachments never hold the
+row checkpoint and are not errors: the heartbeat counts them in metadata
+(`attachments_missing`, `missing_reasons`, `attachments_recovered`,
+`attachments_retry_pending`, `attachments_unavailable_total`) and only write
+failures set `error_message`. `~/` attachment paths resolve against the home
+that owns chat.db. It does not decode attributed-only bodies; these are
+explicitly labeled and counted as `text_unavailable`.
+
+To see why attachments are missing, run the read-only diagnosis on the Mac. It
+reads chat.db and the state file and sends nothing:
+
+```bash
+python3 connectors/imessage.py --diagnose
+```
 
 Run it first with --dry-run, --env pointing to its protected credential file,
 and --since set to that account's last archived timestamp. Add --interval 900

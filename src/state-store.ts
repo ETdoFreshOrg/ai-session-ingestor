@@ -7,12 +7,29 @@ import type { SourceId } from "./types.js";
 interface SerializedState {
   version: 1;
   sources: Partial<Record<SourceId, string[]>>;
+  /**
+   * Original identities of oversized messages that this ingestor itself wrote
+   * as split parts (or that the migration split). An oversized identity that is
+   * seen but absent here was stored whole by an earlier version.
+   */
+  split?: Partial<Record<SourceId, string[]>>;
+  settings?: Record<string, string>;
   updatedAt: string;
+}
+
+function toMap(input: Partial<Record<SourceId, string[]>> | undefined): Map<SourceId, Set<string>> {
+  return new Map(Object.entries(input ?? {}).map(([source, ids]) => [source as SourceId, new Set(ids)]));
+}
+
+function fromMap(input: Map<SourceId, Set<string>>): Partial<Record<SourceId, string[]>> {
+  return Object.fromEntries([...input].map(([source, values]) => [source, [...values].sort()]));
 }
 
 export class StateStore {
   readonly filePath: string;
-  private readonly seen = new Map<SourceId, Set<string>>();
+  private seen = new Map<SourceId, Set<string>>();
+  private split = new Map<SourceId, Set<string>>();
+  private settings: Record<string, string> = {};
 
   constructor(filePath = path.join(envPath("DATA_DIR", ".data"), "ingest-state.json")) {
     this.filePath = filePath;
@@ -20,12 +37,14 @@ export class StateStore {
 
   async load(): Promise<void> {
     this.seen.clear();
+    this.split.clear();
+    this.settings = {};
     if (!fs.existsSync(this.filePath)) return;
     try {
       const parsed = JSON.parse(await fsPromises.readFile(this.filePath, "utf8")) as SerializedState;
-      for (const [source, externalIds] of Object.entries(parsed.sources ?? {})) {
-        this.seen.set(source as SourceId, new Set(externalIds));
-      }
+      this.seen = toMap(parsed.sources);
+      this.split = toMap(parsed.split);
+      this.settings = { ...(parsed.settings ?? {}) };
     } catch (error) {
       throw new Error(
         `Could not load state file ${this.filePath}: ${error instanceof Error ? error.message : String(error)}`,
@@ -43,6 +62,24 @@ export class StateStore {
     this.seen.set(source, values);
   }
 
+  isSplit(source: SourceId, originalExternalId: string): boolean {
+    return this.split.get(source)?.has(originalExternalId) ?? false;
+  }
+
+  markSplit(source: SourceId, originalExternalId: string): void {
+    const values = this.split.get(source) ?? new Set<string>();
+    values.add(originalExternalId);
+    this.split.set(source, values);
+  }
+
+  getSetting(key: string): string | undefined {
+    return this.settings[key];
+  }
+
+  setSetting(key: string, value: string): void {
+    this.settings[key] = value;
+  }
+
   count(source: SourceId): number {
     return this.seen.get(source)?.size ?? 0;
   }
@@ -54,9 +91,9 @@ export class StateStore {
   async save(): Promise<void> {
     const state: SerializedState = {
       version: 1,
-      sources: Object.fromEntries(
-        [...this.seen].map(([source, values]) => [source, [...values].sort()]),
-      ),
+      sources: fromMap(this.seen),
+      ...(this.split.size ? { split: fromMap(this.split) } : {}),
+      ...(Object.keys(this.settings).length ? { settings: this.settings } : {}),
       updatedAt: new Date().toISOString(),
     };
     await fsPromises.mkdir(path.dirname(this.filePath), { recursive: true });

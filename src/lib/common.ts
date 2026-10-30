@@ -102,3 +102,55 @@ export function isAfter(timestamp: Date, sinceMs?: number): boolean {
 export function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
+
+/**
+ * Largest content stored in one Memory Database record. Messages above this are
+ * split into ordered parts. The value is part of each part's identity (part
+ * boundaries depend on it), so changing it would change part external IDs.
+ */
+export const MAX_RECORD_CHARS = 50_000;
+
+/** Tool calls and tool output are capped, not split: they are evidence, not prose. */
+export const TOOL_OUTPUT_MAX_CHARS = 16_000;
+
+function safeCut(text: string, index: number): number {
+  // Never separate a UTF-16 surrogate pair.
+  const code = text.charCodeAt(index - 1);
+  return code >= 0xd800 && code <= 0xdbff ? index - 1 : index;
+}
+
+/**
+ * Deterministically split text into chunks of at most maxChars. A chunk ends at
+ * the last newline in its final fifth when there is one, so paragraphs and code
+ * lines are not cut mid-way; otherwise it is cut at maxChars.
+ */
+export function splitContent(text: string, maxChars = MAX_RECORD_CHARS): string[] {
+  if (maxChars < 2) throw new Error("maxChars must be at least 2");
+  if (text.length <= maxChars) return [text];
+  const parts: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    if (text.length - start <= maxChars) {
+      parts.push(text.slice(start));
+      break;
+    }
+    let end = start + maxChars;
+    const newline = text.lastIndexOf("\n", end - 1);
+    if (newline >= start + Math.floor(maxChars * 0.8)) end = newline + 1;
+    end = safeCut(text, end);
+    parts.push(text.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
+
+/** Cap text at maxChars, saying how much was dropped. */
+export function capText(text: string, maxChars = TOOL_OUTPUT_MAX_CHARS): { text: string; truncated: boolean; originalChars: number } {
+  if (text.length <= maxChars) return { text, truncated: false, originalChars: text.length };
+  const kept = text.slice(0, safeCut(text, maxChars));
+  return {
+    text: `${kept}\n\n[truncated: ${kept.length} of ${text.length} characters kept]`,
+    truncated: true,
+    originalChars: text.length,
+  };
+}

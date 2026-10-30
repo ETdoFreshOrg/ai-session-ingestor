@@ -10,8 +10,11 @@
     "start:cloud": "node dist/cloud-server.js",
     "server": "tsx src/server.ts",
     "sync": "tsx src/cli.ts",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run && python3 test/imessage_test.py",
+    "test:watch": "vitest",
+    "test:ts": "vitest run",
+    "test:python": "python3 test/imessage_test.py",
+    "migrate:oversized": "tsx scripts/migrate-oversized-records.ts"
   },
   "engines": {
     "node": ">=22.5.0"

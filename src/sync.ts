@@ -1,5 +1,6 @@
 import { createAdapters } from "./adapters/index.js";
 import { writeMessages } from "./api-writer.js";
+import { heldForMigration, planRecords } from "./record-plan.js";
 import { StateStore } from "./state-store.js";
 import type {
   NormalizedMessage,
@@ -35,8 +36,41 @@ function emptyResult(source: SourceAdapter, available: boolean): SourceSyncResul
     skipped: 0,
     appended: 0,
     failed: 0,
+    heldForMigration: 0,
     warnings: [],
   };
+}
+
+const TOOL_EVENTS_SETTING = "claudecode.toolEventsSince";
+
+/**
+ * CLAUDECODE_TOOL_EVENTS controls tool call/result records:
+ *   new (default) - only events after this version's first non-dry-run sync
+ *   all           - every event in local transcripts (large one-off backfill)
+ *   <ISO date>    - events at or after that date
+ *   off           - none
+ */
+export async function resolveToolEventsSince(
+  state: StateStore,
+  startedAt: string,
+  dryRun: boolean,
+): Promise<number | undefined> {
+  const raw = process.env.CLAUDECODE_TOOL_EVENTS?.trim() || "new";
+  const mode = raw.toLowerCase();
+  if (["off", "false", "0", "none"].includes(mode)) return undefined;
+  if (["all", "true"].includes(mode)) return 0;
+  if (mode !== "new") {
+    const parsed = Date.parse(raw);
+    if (Number.isNaN(parsed)) throw new Error(`Invalid CLAUDECODE_TOOL_EVENTS value: ${raw}`);
+    return parsed;
+  }
+  const stored = state.getSetting(TOOL_EVENTS_SETTING);
+  if (stored && !Number.isNaN(Date.parse(stored))) return Date.parse(stored);
+  if (!dryRun) {
+    state.setSetting(TOOL_EVENTS_SETTING, startedAt);
+    await state.save();
+  }
+  return Date.parse(startedAt);
 }
 
 export async function runSync(
@@ -54,27 +88,50 @@ export async function runSync(
     : adapters;
   const sourceResults: SourceSyncResult[] = [];
 
+  let toolEventsSinceMs: number | undefined;
+  let toolEventsError: string | null = null;
+  try {
+    toolEventsSinceMs = await resolveToolEventsSince(state, startedAt, options.dryRun ?? false);
+  } catch (error) {
+    toolEventsError = error instanceof Error ? error.message : String(error);
+  }
+
   for (const adapter of selected) {
     const available = adapter.isAvailable();
     const result = emptyResult(adapter, available);
     if (!available) {
-      result.warnings.push(`Source directory is unavailable: ${adapter.rootPath}`);
+      // A tool that is not installed on this host is not a problem. The
+      // freshness report decides whether anything is published for it.
       sourceResults.push(result);
       continue;
     }
+    if (toolEventsError && adapter.id === "claudecode") result.warnings.push(toolEventsError);
 
     try {
       const scan = await adapter.scan({
         sinceMs: options.sinceMs,
         maxMessages: options.maxMessages,
+        toolEventsSinceMs,
       });
-      const discovered = uniqueMessages(scan.messages);
+      const records: NormalizedMessage[] = [];
+      const newlySplit: NormalizedMessage[] = [];
+      for (const group of uniqueMessages(scan.messages).map((message) => planRecords(message))) {
+        if (heldForMigration(group, state)) {
+          result.heldForMigration += 1;
+          continue;
+        }
+        if (group.split) newlySplit.push(group.original);
+        records.push(...group.records);
+      }
       const pending = options.rescan
-        ? discovered
-        : discovered.filter((message) => !state.has(message.source, message.externalId));
+        ? records
+        : records.filter((message) => !state.has(message.source, message.externalId));
       result.sessions = scan.sessions;
-      result.discovered = discovered.length;
+      result.discovered = records.length;
       result.warnings.push(...scan.warnings);
+      if (!options.dryRun) {
+        for (const message of newlySplit) state.markSplit(message.source, message.externalId);
+      }
 
       if (options.baseline) {
         if (options.dryRun) {
@@ -123,8 +180,9 @@ export async function runSync(
       skipped: sum.skipped + result.skipped,
       appended: sum.appended + result.appended,
       failed: sum.failed + result.failed,
+      heldForMigration: sum.heldForMigration + result.heldForMigration,
     }),
-    { sessions: 0, discovered: 0, pending: 0, baselined: 0, inserted: 0, skipped: 0, appended: 0, failed: 0 },
+    { sessions: 0, discovered: 0, pending: 0, baselined: 0, inserted: 0, skipped: 0, appended: 0, failed: 0, heldForMigration: 0 },
   );
 
   return {
