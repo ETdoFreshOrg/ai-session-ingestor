@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ClaudeCodeAdapter } from "../src/adapters/index.js";
-import { toApiPayload, type ApiConfig } from "../src/api-writer.js";
+import { serializeApiPayload, toApiPayload, type ApiConfig } from "../src/api-writer.js";
 import { capText, MAX_RECORD_CHARS, splitContent, TOOL_OUTPUT_MAX_CHARS } from "../src/lib/common.js";
 import { planRecords } from "../src/record-plan.js";
 import { StateStore } from "../src/state-store.js";
@@ -269,5 +269,22 @@ describe("oversized-record migration script", () => {
     } finally {
       delete process.env.DATA_DIR;
     }
+  });
+});
+
+describe("API payload serialization", () => {
+  it("drops NUL characters, which Postgres rejects", () => {
+    const message: NormalizedMessage = {
+      source: "claudecode",
+      sender: "tool:Read",
+      recipient: "Claude",
+      content: "bin\u0000ary",
+      timestamp: new Date("2026-10-30T00:00:00Z"),
+      externalId: "s1:r1:tool_result:toolu_1",
+      metadata: { sessionId: "s1", kind: "tool_output", note: "a\u0000b" },
+    };
+    const body = JSON.parse(serializeApiPayload(message));
+    expect(body.content).toBe("binary");
+    expect(body.metadata.note).toBe("ab");
   });
 });

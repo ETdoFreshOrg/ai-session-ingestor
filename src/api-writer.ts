@@ -59,6 +59,12 @@ export function toApiPayload(message: NormalizedMessage): Record<string, unknown
   };
 }
 
+// Postgres text and jsonb reject NUL, and tool output from binary files can carry it.
+export function serializeApiPayload(message: NormalizedMessage): string {
+  return JSON.stringify(toApiPayload(message), (_key, value) =>
+    typeof value === 'string' ? value.replace(/\u0000/g, '') : value);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -194,7 +200,7 @@ async function writeOne(
         url,
         "POST",
         { "Content-Type": "application/json", Authorization: `Bearer ${config.token}` },
-        JSON.stringify(toApiPayload(message)),
+        serializeApiPayload(message),
         timeoutMs,
       );
     } catch (error) {
