@@ -141,6 +141,13 @@ read-write so SQLite can share the WAL index; the adapter itself only reads.
 Set `INGESTOR_HOSTNAME` in a container so its freshness key
 (`ai-session:<host>:etbot`) survives redeploys. The write token needs `etbot` scope.
 
+`Dockerfile.etbot` builds that ingestor: the same service, running as uid 10001.
+The Dokploy app **ETBot Ingestor** (project ET Bot, on the Minisforum) uses it,
+with `etbot-data` mounted at `/sources/etbot`,
+`ETBOT_DB_PATH=/sources/etbot/etbot/etbot.sqlite`,
+`INGESTOR_HOSTNAME=etzminisforumx1pro-etbot`, `AUTO_SYNC=true` and a write token
+scoped to `etbot`. Its checkpoint volume is `etbot-ingestor-state` at `/app/.data`.
+
 ### Oversized messages
 
 A message longer than 50,000 characters is split into ordered parts. Part 1
