@@ -4,6 +4,7 @@ export const SOURCE_IDS = [
   "opencode",
   "antigravity",
   "pi",
+  "etbot",
 ] as const;
 
 export type SourceId = (typeof SOURCE_IDS)[number];

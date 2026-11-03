@@ -113,3 +113,12 @@ describe("unavailable sources", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("host name", () => {
+  it("uses INGESTOR_HOSTNAME for the freshness key, so a container reports under a stable name", async () => {
+    process.env.INGESTOR_HOSTNAME = "etzminisforumx1pro-etbot";
+    await saveAndReportSync(syncResult(sourceResult("etbot", true)));
+    expect(calls[0]).toMatchObject({ method: "PUT", key: "ai-session:etzminisforumx1pro-etbot:etbot" });
+    expect(calls[0]?.body?.metadata).toMatchObject({ hostname: "etzminisforumx1pro-etbot" });
+  });
+});

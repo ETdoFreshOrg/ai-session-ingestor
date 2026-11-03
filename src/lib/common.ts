@@ -25,8 +25,9 @@ export function userName(): string {
   );
 }
 
+/** INGESTOR_HOSTNAME names the host when os.hostname() is a container ID. */
 export function hostname(): string {
-  return os.hostname();
+  return process.env.INGESTOR_HOSTNAME?.trim() || os.hostname();
 }
 
 export function validDate(value: unknown): Date | null {

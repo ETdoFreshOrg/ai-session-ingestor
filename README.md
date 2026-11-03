@@ -2,7 +2,7 @@
 
 One service for ingesting local AI coding sessions into the ET Memory Database.
 It replaces the separate Claude Code and Codex ingestors and adds OpenCode,
-Antigravity, and Pi.
+Antigravity, Pi, and ETBot.
 
 ## Codex cloud service
 
@@ -86,6 +86,7 @@ SQLite and atomic export files survive redeploys. Shutdown preserves checkpoints
 | OpenCode | `~/.local/share/opencode/opencode.db` | `opencode` | OpenCode message ID |
 | Antigravity | `~/.gemini/antigravity-cli/brain/**/transcript.jsonl` | `antigravity` | conversation + step + event + line |
 | Pi | `~/.pi/agent/sessions/**/*.jsonl` | `pi` | session ID + entry ID |
+| ETBot | `~/.local/share/etbot/etbot.sqlite` (read-only) | `etbot` | `etbot:<message id>` (shell runs add `:shell:<n>`) |
 
 Every user and assistant message is its own record in its session's
 conversation (`metadata.sessionId` / `conversation_id`); no adapter stores a
@@ -105,6 +106,40 @@ Each tool record is capped at 16,000 characters (`truncated` and
 - `off`: none.
 
 The other adapters still store only user and assistant text.
+
+### ETBot
+
+ETBot ([duet-rust](https://github.com/ETdoFreshOrg/duet-rust)) keeps its whole
+workspace as one JSON row in `etbot.sqlite`. The adapter opens the database
+read-only and changes nothing in ETBot. Every channel (including archived ones
+and the global Everything conversation), side thread and task thread is its own
+conversation: `etbot:<channel id>` or `etbot:<channel id>:<thread id>`, titled
+`ETBot · <channel>` or `ETBot · <channel> · <thread>`. Records carry the
+channel, thread, task, model (from the reply's note), actions, reply/answer
+links and attachment references (name, type, size, ETBot storage key; the bytes
+stay in ETBot).
+
+- ETBot timestamps are whole seconds. A millisecond per earlier message in the
+  same second keeps a reply after its question.
+- A reply still streaming is skipped and taken once it has finished.
+- Messages ETBot imported from Duet are already archived under `anthropic`; their
+  provenance names that record. They are skipped unless `ETBOT_IMPORTED=include`
+  (then stored with `importedFrom`). Channels that began as imports are still
+  read for their newer messages.
+- Schedule turns (prompts ETBot sends itself on a timer) are
+  `kind = injected_instructions`. Briefs that Claude writes for a side thread are
+  ordinary records sent by `ETBot`.
+- Commands run on ETBot's computer are `kind = tool_output` records (capped like
+  Claude Code tool output). `ETBOT_TOOL_EVENTS=off` leaves them out.
+- System lines, empty messages, task status updates and Make items are not stored.
+
+`ETBOT_DATA_DIR` (default `$XDG_DATA_HOME/etbot`, else `~/.local/share/etbot`)
+or `ETBOT_DB_PATH` locate the database. The hosted ETBot keeps it in the Dokploy
+volume `etbot-data` at `etbot/etbot.sqlite`, which is owned by uid 10001. An
+ingestor reading it there needs that uid (or root) and should mount the volume
+read-write so SQLite can share the WAL index; the adapter itself only reads.
+Set `INGESTOR_HOSTNAME` in a container so its freshness key
+(`ai-session:<host>:etbot`) survives redeploys. The write token needs `etbot` scope.
 
 ### Oversized messages
 
@@ -177,8 +212,10 @@ SENDER_NAME=ET
 The write token should be limited to these sources:
 
 ```text
-claudecode,codex,opencode,antigravity,pi
+claudecode,codex,opencode,antigravity,pi,etbot
 ```
+
+(`etbot` only where ETBot runs.)
 
 All source paths can be overridden; see [.env.example](.env.example).
 

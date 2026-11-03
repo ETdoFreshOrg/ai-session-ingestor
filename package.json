@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Unified Claude Code, Codex, OpenCode, Antigravity, and Pi session ingestor for Memory Database",
+  "description": "Unified Claude Code, Codex, OpenCode, Antigravity, Pi, and ETBot session ingestor for Memory Database",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",

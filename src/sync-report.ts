@@ -1,7 +1,6 @@
-import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { envPath } from './lib/common.js';
+import { envPath, hostname } from './lib/common.js';
 import { getApiConfig, request } from './api-writer.js';
 import type { SourceSyncResult, SyncResult } from './types.js';
 
@@ -29,7 +28,7 @@ async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
 }
 
 function stateKey(source: string): string {
-  return `ai-session:${os.hostname()}:${source}`;
+  return `ai-session:${hostname()}:${source}`;
 }
 
 function availableError(source: SourceSyncResult): string | null {
@@ -63,7 +62,7 @@ export async function saveAndReportSync(result: SyncResult): Promise<void> {
       const response = await put(key, {
         source: source.source, last_run_at: result.finishedAt,
         ...(!error ? { last_sync_date: result.finishedAt } : {}), error_message: error,
-        metadata: { hostname: os.hostname(), ingestor: 'ai-session-ingestor', started_at: result.startedAt,
+        metadata: { hostname: hostname(), ingestor: 'ai-session-ingestor', started_at: result.startedAt,
           finished_at: result.finishedAt, available: true, discovered: source.discovered,
           pending: source.pending, inserted: source.inserted, skipped: source.skipped, failed: source.failed,
           held_for_migration: source.heldForMigration,
@@ -92,7 +91,7 @@ export async function saveAndReportSync(result: SyncResult): Promise<void> {
       }
     }
 
-    const base = { hostname: os.hostname(), ingestor: 'ai-session-ingestor', available: false, checked_at: result.finishedAt };
+    const base = { hostname: hostname(), ingestor: 'ai-session-ingestor', available: false, checked_at: result.finishedAt };
     if (lastAvailable) {
       // It worked on this host before and has gone: worth exactly one warning.
       const message = `Source data no longer found on this host (last available ${lastAvailable})`;
